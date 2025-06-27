@@ -8,6 +8,8 @@ import keyboard
 import speech_recognition as sr
 from dotenv import load_dotenv
 from groq import Groq
+from PIL import Image
+from transformers import BlipProcessor, BlipForConditionalGeneration
 
 # === Load API keys ===
 load_dotenv()
@@ -27,48 +29,92 @@ AUDIO_FOLDER = os.path.join(RESPONSES_FOLDER, "audio_inputs")
 USER_INPUT_LOG = os.path.join(RESPONSES_FOLDER, "real_time_audio_input.txt")
 os.makedirs(AUDIO_FOLDER, exist_ok=True)
 
-# === Global for voice stop ===
-speak_thread = None
-speak_stop_flag = False
+# === Voice output thread control ===
+def speak(text):
+    def _speak():
+        engine.say(text)
+        engine.runAndWait()
+    thread = threading.Thread(target=_speak)
+    thread.start()
+    return thread
 
-def record_audio():
+def stop_speech():
+    engine.stop()
+
+# === Transcribe audio via AssemblyAI ===
+def transcribe_audio_file(filepath):
+    if not os.path.exists(filepath):
+        raise Exception("❌ File does not exist.")
+
+    print("🔼 Uploading to AssemblyAI...")
+    headers = {'authorization': ASSEMBLYAI_API_KEY}
+    with open(filepath, 'rb') as f:
+        response = requests.post("https://api.assemblyai.com/v2/upload", headers=headers, data=f.read())
+    response.raise_for_status()
+    audio_url = response.json()['upload_url']
+
+    print("📄 Requesting transcription...")
+    trans_res = requests.post(
+        "https://api.assemblyai.com/v2/transcript",
+        headers={'authorization': ASSEMBLYAI_API_KEY, 'content-type': 'application/json'},
+        json={'audio_url': audio_url}
+    )
+    transcript_id = trans_res.json()['id']
+
+    print("⏳ Waiting for transcription result...")
+    for _ in range(30):
+        poll_res = requests.get(f"https://api.assemblyai.com/v2/transcript/{transcript_id}",
+                                headers={'authorization': ASSEMBLYAI_API_KEY})
+        poll_res.raise_for_status()
+        result = poll_res.json()
+        if result['status'] == 'completed':
+            return result['text']
+        elif result['status'] == 'error':
+            raise Exception(f"❌ Transcription failed: {result['error']}")
+        time.sleep(2)
+
+    raise Exception("❌ Transcription timed out.")
+
+# === Record from microphone and transcribe ===
+def record_and_transcribe():
     recognizer = sr.Recognizer()
-    with sr.Microphone(sample_rate=16000) as source:
-        print("🎤 Speak now...")
-        recognizer.adjust_for_ambient_noise(source)
-        audio = recognizer.listen(source)
+    mic = sr.Microphone(sample_rate=16000)
+
+    with mic as source:
+        print("🎤 Adjusting for ambient noise...")
+        recognizer.adjust_for_ambient_noise(source, duration=1)
+
+        print("🎙️ Listening... (start speaking within 10s)")
+        try:
+            audio = recognizer.listen(source, timeout=10, phrase_time_limit=15)
+        except sr.WaitTimeoutError:
+            raise Exception("⏰ Timeout: No speech detected within 10 seconds.")
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = os.path.join(AUDIO_FOLDER, f"audio_{timestamp}.wav")
-    wav_data = audio.get_wav_data()
-
     with open(filename, "wb") as f:
-        f.write(wav_data)
+        f.write(audio.get_wav_data())
 
     if os.path.getsize(filename) == 0:
-        raise Exception("❌ Error: Audio file is empty!")
+        raise Exception("❌ Error: Recorded audio is empty!")
 
-    return filename
+    return transcribe_audio_file(filename)
 
-def transcribe_audio_assemblyai(filename):
-    headers = {'authorization': ASSEMBLYAI_API_KEY}
-    with open(filename, 'rb') as f:
-        upload_res = requests.post("https://api.assemblyai.com/v2/upload", headers=headers, files={"file": f})
-    audio_url = upload_res.json().get("upload_url")
-    if not audio_url:
-        raise Exception("❌ Audio upload failed.")
+# === Image captioning ===
+blip_processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
+blip_model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")
 
-    trans_res = requests.post("https://api.assemblyai.com/v2/transcript", headers=headers, json={"audio_url": audio_url})
-    transcript_id = trans_res.json().get("id")
+def caption_image(image_path):
+    if not os.path.exists(image_path):
+        raise Exception("❌ Image file not found.")
 
-    while True:
-        poll_res = requests.get(f"https://api.assemblyai.com/v2/transcript/{transcript_id}", headers=headers).json()
-        if poll_res['status'] == 'completed':
-            return poll_res['text']
-        elif poll_res['status'] == 'error':
-            raise Exception(f"❌ Transcription failed: {poll_res['error']}")
-        time.sleep(2)
+    image = Image.open(image_path).convert("RGB")
+    inputs = blip_processor(image, return_tensors="pt")
+    out = blip_model.generate(**inputs, max_new_tokens=50)
+    caption = blip_processor.decode(out[0], skip_special_tokens=True)
+    return caption
 
+# === Logging ===
 def save_user_input(text):
     with open(USER_INPUT_LOG, "a", encoding="utf-8") as f:
         f.write(text + "\n")
@@ -83,33 +129,27 @@ def load_history():
             return f.read()
     return ""
 
-# === Voice output handling ===
-def speak(text):
-    def _speak():
-        engine.say(text)
-        engine.runAndWait()
-    thread = threading.Thread(target=_speak)
-    thread.start()
-    return thread
-
-def stop_speech():
-    engine.stop()
-
 # === Main Chat Loop ===
-print("🤖 Groq Multimodal Chatbot (text/voice input, voice reply)")
+print("🤖 Groq Multimodal Chatbot (text / voice / upload / image input, voice reply)")
 print("Type or say 'exit' to quit.\n")
 
 while True:
     try:
-        mode = input("🌀 Input mode [voice/text]: ").strip().lower()
+        mode = input("🌀 Input mode [voice/text/upload/image]: ").strip().lower()
 
         if mode == "voice":
-            audio_file = record_audio()
-            user_input = transcribe_audio_assemblyai(audio_file)
+            user_input = record_and_transcribe()
         elif mode == "text":
             user_input = input("🧑 You: ").strip()
+        elif mode == "upload":
+            filepath = input("📁 Enter path to your audio file (WAV/MP3): ").strip()
+            user_input = transcribe_audio_file(filepath)
+        elif mode == "image":
+            image_path = input("🖼️ Enter image file path: ").strip()
+            user_input = caption_image(image_path)
+            print(f"📝 Image Caption: {user_input}")
         else:
-            print("❗ Invalid input. Use 'voice' or 'text'.")
+            print("❗ Invalid input. Use 'voice', 'text', 'upload', or 'image'.")
             continue
 
         if user_input.lower() in ["exit", "quit"]:
@@ -119,15 +159,11 @@ while True:
         print(f"🗣 You: {user_input}")
         save_user_input(user_input)
 
-        history = load_history()
-        messages = []
-
-        # ✅ Short & crisp instruction
-        messages.append({"role": "system", "content": "You are a helpful assistant. Always give short, crisp, and informative responses."})
-        if history:
-            messages.append({"role": "system", "content": f"Chat so far:\n{history.strip()}"})
-
-        messages.append({"role": "user", "content": user_input})
+        # === Ask Groq for response
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant. Always give short, crisp, and informative responses."},
+            {"role": "user", "content": user_input}
+        ]
 
         completion = groq_client.chat.completions.create(
             model="llama3-70b-8192",
@@ -137,7 +173,7 @@ while True:
 
         print(f"\n🤖 Groq: {bot_response}\n")
 
-        # 🔊 Speak with option to stop
+        # === Speak response with interrupt
         thread = speak(bot_response)
         print("🔊 Press 's' to stop voice output early...")
         while thread.is_alive():
