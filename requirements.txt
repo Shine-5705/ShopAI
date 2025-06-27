@@ -1,6 +1,9 @@
 python-dotenv
-speechrecognition
-pyaudio
 requests
-groq
 pyttsx3
+SpeechRecognition
+keyboard
+groq
+transformers
+torch
+Pillow
