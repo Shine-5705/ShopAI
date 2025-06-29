@@ -8,8 +8,7 @@ import keyboard
 import speech_recognition as sr
 from dotenv import load_dotenv
 from groq import Groq
-from PIL import Image
-from transformers import BlipProcessor, BlipForConditionalGeneration
+from urllib.parse import urlparse
 
 # === Load API keys ===
 load_dotenv()
@@ -29,7 +28,7 @@ AUDIO_FOLDER = os.path.join(RESPONSES_FOLDER, "audio_inputs")
 USER_INPUT_LOG = os.path.join(RESPONSES_FOLDER, "real_time_audio_input.txt")
 os.makedirs(AUDIO_FOLDER, exist_ok=True)
 
-# === Voice output thread control ===
+# === Voice output ===
 def speak(text):
     def _speak():
         engine.say(text)
@@ -41,12 +40,12 @@ def speak(text):
 def stop_speech():
     engine.stop()
 
-# === Transcribe audio via AssemblyAI ===
+# === Transcription via AssemblyAI ===
 def transcribe_audio_file(filepath):
     if not os.path.exists(filepath):
         raise Exception("❌ File does not exist.")
 
-    print("🔼 Uploading to AssemblyAI...")
+    print("👌 Uploading to AssemblyAI...")
     headers = {'authorization': ASSEMBLYAI_API_KEY}
     with open(filepath, 'rb') as f:
         response = requests.post("https://api.assemblyai.com/v2/upload", headers=headers, data=f.read())
@@ -75,7 +74,7 @@ def transcribe_audio_file(filepath):
 
     raise Exception("❌ Transcription timed out.")
 
-# === Record from microphone and transcribe ===
+# === Mic recording ===
 def record_and_transcribe():
     recognizer = sr.Recognizer()
     mic = sr.Microphone(sample_rate=16000)
@@ -84,7 +83,7 @@ def record_and_transcribe():
         print("🎤 Adjusting for ambient noise...")
         recognizer.adjust_for_ambient_noise(source, duration=1)
 
-        print("🎙️ Listening... (start speaking within 10s)")
+        print("🎤 Listening... (start speaking within 10s)")
         try:
             audio = recognizer.listen(source, timeout=10, phrase_time_limit=15)
         except sr.WaitTimeoutError:
@@ -99,20 +98,6 @@ def record_and_transcribe():
         raise Exception("❌ Error: Recorded audio is empty!")
 
     return transcribe_audio_file(filename)
-
-# === Image captioning ===
-blip_processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
-blip_model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")
-
-def caption_image(image_path):
-    if not os.path.exists(image_path):
-        raise Exception("❌ Image file not found.")
-
-    image = Image.open(image_path).convert("RGB")
-    inputs = blip_processor(image, return_tensors="pt")
-    out = blip_model.generate(**inputs, max_new_tokens=50)
-    caption = blip_processor.decode(out[0], skip_special_tokens=True)
-    return caption
 
 # === Logging ===
 def save_user_input(text):
@@ -129,41 +114,97 @@ def load_history():
             return f.read()
     return ""
 
+# === Image helpers ===
+TEMP_IMAGE_FILE = "temp_image.jpg"
+
+def download_image(url):
+    try:
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            with open(TEMP_IMAGE_FILE, "wb") as f:
+                f.write(response.content)
+            return TEMP_IMAGE_FILE
+        else:
+            print("❌ Failed to download image.")
+            return None
+    except Exception as e:
+        print(f"❌ Error downloading image: {e}")
+        return None
+
+def is_url(path):
+    try:
+        result = urlparse(path)
+        return all([result.scheme, result.netloc])
+    except:
+        return False
+
 # === Main Chat Loop ===
-print("🤖 Groq Multimodal Chatbot (text / voice / upload / image input, voice reply)")
+print("Groq Multimodal Chatbot (text / voice / upload / image input, voice reply)")
 print("Type or say 'exit' to quit.\n")
+
+image_context = None
 
 while True:
     try:
-        mode = input("🌀 Input mode [voice/text/upload/image]: ").strip().lower()
+        mode = input("Input mode [voice/text/upload/image]: ").strip().lower()
 
         if mode == "voice":
             user_input = record_and_transcribe()
+
         elif mode == "text":
-            user_input = input("🧑 You: ").strip()
+            user_input = input("You: ").strip()
+
         elif mode == "upload":
-            filepath = input("📁 Enter path to your audio file (WAV/MP3): ").strip()
+            filepath = input("Enter path to your audio file (WAV/MP3): ").strip()
             user_input = transcribe_audio_file(filepath)
+
         elif mode == "image":
-            image_path = input("🖼️ Enter image file path: ").strip()
-            user_input = caption_image(image_path)
-            print(f"📝 Image Caption: {user_input}")
+            image_input = input("Enter image file path or URL: ").strip()
+
+            if is_url(image_input):
+                image_path = download_image(image_input)
+                if not image_path:
+                    print("❌ Could not download image.")
+                    continue
+            elif os.path.exists(image_input):
+                image_path = image_input
+            else:
+                print("❌ Invalid image path or URL.")
+                continue
+
+            print("✅ Image loaded.")
+            caption = input("Enter your own description of the image: ").strip()
+            if not caption:
+                print("❗ Caption cannot be empty.")
+                continue
+
+            image_context = f"Image Description: {caption}"
+            print("You can now ask questions about this image in 'text' mode.")
+            continue
+
+        elif mode == "exit" or mode == "quit":
+            print("Goodbye!")
+            break
+
         else:
-            print("❗ Invalid input. Use 'voice', 'text', 'upload', or 'image'.")
+            print("❓ Invalid input. Use 'voice', 'text', 'upload', or 'image'.")
             continue
 
         if user_input.lower() in ["exit", "quit"]:
-            print("👋 Goodbye!")
+            print("Goodbye!")
             break
 
-        print(f"🗣 You: {user_input}")
-        save_user_input(user_input)
-
-        # === Ask Groq for response
-        messages = [
-            {"role": "system", "content": "You are a helpful assistant. Always give short, crisp, and informative responses."},
-            {"role": "user", "content": user_input}
-        ]
+        if image_context:
+            prompt = f"{image_context}\nQuestion: {user_input}"
+            messages = [
+                {"role": "system", "content": "You're a helpful assistant answering questions about images based on user-provided descriptions."},
+                {"role": "user", "content": prompt}
+            ]
+        else:
+            messages = [
+                {"role": "system", "content": "You are a helpful assistant. Always give short, crisp, and informative responses."},
+                {"role": "user", "content": user_input}
+            ]
 
         completion = groq_client.chat.completions.create(
             model="llama3-70b-8192",
@@ -171,19 +212,25 @@ while True:
         )
         bot_response = completion.choices[0].message.content.strip()
 
-        print(f"\n🤖 Groq: {bot_response}\n")
+        print(f"\nGroq: {bot_response}\n")
 
-        # === Speak response with interrupt
         thread = speak(bot_response)
-        print("🔊 Press 's' to stop voice output early...")
+        print("Press 's' to stop voice output early...")
         while thread.is_alive():
             if keyboard.is_pressed("s"):
                 stop_speech()
-                print("⏹️ Voice output stopped.")
+                print("Voice output stopped.")
                 break
             time.sleep(0.1)
 
+        save_user_input(user_input)
         save_to_history(user_input, bot_response)
+
+        if image_context and mode != "image":
+            continue
+
+        if mode == "image" and image_path == TEMP_IMAGE_FILE and os.path.exists(TEMP_IMAGE_FILE):
+            os.remove(TEMP_IMAGE_FILE)
 
     except Exception as e:
         print(f"❌ Error: {e}")
