@@ -83,11 +83,13 @@ def record_and_transcribe():
         print("🎤 Adjusting for ambient noise...")
         recognizer.adjust_for_ambient_noise(source, duration=1)
 
-        print("🎤 Listening... (start speaking within 10s)")
+        # Increased timeout and phrase_time_limit for longer recording
+        print("🎤 Listening... (start speaking within 30s, max phrase 60s)")
         try:
-            audio = recognizer.listen(source, timeout=10, phrase_time_limit=15)
+            audio = recognizer.listen(source, timeout=30, phrase_time_limit=60)
+            print("✅ Voice input received. Processing...") # Explicit confirmation
         except sr.WaitTimeoutError:
-            raise Exception("⏰ Timeout: No speech detected within 10 seconds.")
+            raise Exception("⏰ Timeout: No speech detected within 30 seconds.")
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = os.path.join(AUDIO_FOLDER, f"audio_{timestamp}.wav")
@@ -150,16 +152,24 @@ while True:
 
         if mode == "voice":
             user_input = record_and_transcribe()
+            # Confirmation for voice input is already inside record_and_transcribe
 
         elif mode == "text":
             user_input = input("You: ").strip()
+            if user_input: # Check if input is not empty
+                print("✅ Text input received. Processing...") # Explicit confirmation
 
         elif mode == "upload":
             filepath = input("Enter path to your audio file (WAV/MP3): ").strip()
+            if filepath: # Check if input is not empty
+                print("✅ File path received. Processing audio file...") # Explicit confirmation
             user_input = transcribe_audio_file(filepath)
+
 
         elif mode == "image":
             image_input = input("Enter image file path or URL: ").strip()
+            if image_input: # Check if input is not empty
+                print("✅ Image input received. Processing image...") # Explicit confirmation
 
             if is_url(image_input):
                 image_path = download_image(image_input)
@@ -177,6 +187,8 @@ while True:
             if not caption:
                 print("❗ Caption cannot be empty.")
                 continue
+            else:
+                print("✅ Image description received.") # Explicit confirmation for caption
 
             image_context = f"Image Description: {caption}"
             print("You can now ask questions about this image in 'text' mode.")
@@ -227,10 +239,17 @@ while True:
         save_to_history(user_input, bot_response)
 
         if image_context and mode != "image":
-            continue
-
-        if mode == "image" and image_path == TEMP_IMAGE_FILE and os.path.exists(TEMP_IMAGE_FILE):
+            # If we had an image context but the current mode isn't 'image',
+            # we want to continue using that context for follow-up questions
+            # without re-prompting for image input.
+            # No change to image_context, just continue to next loop iteration.
+            pass
+        elif mode == "image" and image_path == TEMP_IMAGE_FILE and os.path.exists(TEMP_IMAGE_FILE):
             os.remove(TEMP_IMAGE_FILE)
+            # If the image was temporary and processed, we can clear the image_context
+            # for the next interaction, unless the user explicitly wants to keep it.
+            # For now, let's keep it until a new image is input or mode changes away from image.
+            # To clear after one image interaction: image_context = None
 
     except Exception as e:
         print(f"❌ Error: {e}")
