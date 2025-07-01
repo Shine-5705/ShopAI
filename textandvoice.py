@@ -20,6 +20,7 @@ if not ASSEMBLYAI_API_KEY or not GROQ_API_KEY:
 # === Init clients ===
 groq_client = Groq(api_key=GROQ_API_KEY)
 engine = pyttsx3.init()
+speech_lock = threading.Lock()  # ✅ Added lock for thread-safe speech
 
 # === Paths ===
 HISTORY_FILE = "chat_history.txt"
@@ -31,36 +32,35 @@ os.makedirs(AUDIO_FOLDER, exist_ok=True)
 # === Voice output ===
 def speak(text):
     def _speak():
-        engine.say(text)
-        engine.runAndWait()
+        with speech_lock:  # ✅ Ensures one speech thread at a time
+            engine.say(text)
+            engine.runAndWait()
     thread = threading.Thread(target=_speak)
     thread.start()
     return thread
 
 def stop_speech():
-    engine.stop()
+    with speech_lock:
+        engine.stop()
 
 # === Transcription via AssemblyAI ===
 def transcribe_audio_file(filepath):
     if not os.path.exists(filepath):
         raise Exception("❌ File does not exist.")
 
-    print("👌 Uploading to AssemblyAI...")
     headers = {'authorization': ASSEMBLYAI_API_KEY}
     with open(filepath, 'rb') as f:
         response = requests.post("https://api.assemblyai.com/v2/upload", headers=headers, data=f.read())
     response.raise_for_status()
     audio_url = response.json()['upload_url']
 
-    print("📄 Requesting transcription...")
-    trans_res = requests.post(
+    res = requests.post(
         "https://api.assemblyai.com/v2/transcript",
         headers={'authorization': ASSEMBLYAI_API_KEY, 'content-type': 'application/json'},
         json={'audio_url': audio_url}
     )
-    transcript_id = trans_res.json()['id']
+    transcript_id = res.json()['id']
 
-    print("⏳ Waiting for transcription result...")
     for _ in range(30):
         poll_res = requests.get(f"https://api.assemblyai.com/v2/transcript/{transcript_id}",
                                 headers={'authorization': ASSEMBLYAI_API_KEY})
@@ -83,11 +83,10 @@ def record_and_transcribe():
         print("🎤 Adjusting for ambient noise...")
         recognizer.adjust_for_ambient_noise(source, duration=1)
 
-        # Increased timeout and phrase_time_limit for longer recording
         print("🎤 Listening... (start speaking within 30s, max phrase 60s)")
         try:
             audio = recognizer.listen(source, timeout=30, phrase_time_limit=60)
-            print("✅ Voice input received. Processing...") # Explicit confirmation
+            print("✅ Voice input received. Processing...")
         except sr.WaitTimeoutError:
             raise Exception("⏰ Timeout: No speech detected within 30 seconds.")
 
@@ -152,24 +151,22 @@ while True:
 
         if mode == "voice":
             user_input = record_and_transcribe()
-            # Confirmation for voice input is already inside record_and_transcribe
 
         elif mode == "text":
             user_input = input("You: ").strip()
-            if user_input: # Check if input is not empty
-                print("✅ Text input received. Processing...") # Explicit confirmation
+            if user_input:
+                print("✅ Text input received. Processing...")
 
         elif mode == "upload":
             filepath = input("Enter path to your audio file (WAV/MP3): ").strip()
-            if filepath: # Check if input is not empty
-                print("✅ File path received. Processing audio file...") # Explicit confirmation
+            if filepath:
+                print("✅ File path received. Processing audio file...")
             user_input = transcribe_audio_file(filepath)
-
 
         elif mode == "image":
             image_input = input("Enter image file path or URL: ").strip()
-            if image_input: # Check if input is not empty
-                print("✅ Image input received. Processing image...") # Explicit confirmation
+            if image_input:
+                print("✅ Image input received. Processing image...")
 
             if is_url(image_input):
                 image_path = download_image(image_input)
@@ -188,13 +185,13 @@ while True:
                 print("❗ Caption cannot be empty.")
                 continue
             else:
-                print("✅ Image description received.") # Explicit confirmation for caption
+                print("✅ Image description received.")
 
             image_context = f"Image Description: {caption}"
             print("You can now ask questions about this image in 'text' mode.")
             continue
 
-        elif mode == "exit" or mode == "quit":
+        elif mode in ["exit", "quit"]:
             print("Goodbye!")
             break
 
@@ -226,8 +223,10 @@ while True:
 
         print(f"\nGroq: {bot_response}\n")
 
+        stop_speech()  # ✅ Make sure last one is stopped before starting new
         thread = speak(bot_response)
         print("Press 's' to stop voice output early...")
+
         while thread.is_alive():
             if keyboard.is_pressed("s"):
                 stop_speech()
@@ -239,17 +238,9 @@ while True:
         save_to_history(user_input, bot_response)
 
         if image_context and mode != "image":
-            # If we had an image context but the current mode isn't 'image',
-            # we want to continue using that context for follow-up questions
-            # without re-prompting for image input.
-            # No change to image_context, just continue to next loop iteration.
             pass
         elif mode == "image" and image_path == TEMP_IMAGE_FILE and os.path.exists(TEMP_IMAGE_FILE):
             os.remove(TEMP_IMAGE_FILE)
-            # If the image was temporary and processed, we can clear the image_context
-            # for the next interaction, unless the user explicitly wants to keep it.
-            # For now, let's keep it until a new image is input or mode changes away from image.
-            # To clear after one image interaction: image_context = None
 
     except Exception as e:
         print(f"❌ Error: {e}")
