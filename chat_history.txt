@@ -188,3 +188,55 @@ I can adapt to various topics and styles, from explaining complex concepts like 
 
 Feel free to ask me anything, and I'll do my best to help!
 
+User: Okay, okay, okay. Give me a shirt of 500 rupees with blue in color and red borders and flower floral and a black pant also.
+Grok: Here's your outfit:
+
+** Shirt: **
+
+* Price: ₹500
+* Color: Blue with Red borders
+* Pattern: Flower Floral
+
+** Pants: **
+
+* Color: Black
+
+Is this what you're looking for?
+
+User: Give me a shirt of blue color and with white borders, and it should be plain, just this.
+Grok: Here's a description of the shirt you requested:
+
+**Navy Blue Plain Shirt with White Borders**
+
+* Color: Navy Blue
+* Style: Plain (no patterns or designs)
+* Borders: White
+* Fabric: Not specified (assuming a standard cotton or polyester blend)
+
+Is this what you had in mind?
+
+User: Give me a shirt with bl.
+Grok: You want a shirt with a specific color! BL stands for Blue, right? Here are some popular shades of blue for shirts:
+
+1. Royal Blue
+2. Navy Blue
+3. Light Blue
+4. Sky Blue
+5. Powder Blue
+
+Which one would you prefer?
+
+User: give me a blue shirt
+Grok: I'm happy to help! However, I'm a text-based assistant, I don't have the ability to physically provide you with a blue shirt. But I can certainly help you with suggestions on where to find one or provide advice on how to style a blue shirt!
+
+User: give me something like this
+Grok: I think I can help you with that!
+
+Based on your description, I'm imagining an image that features a blue MIDI ( Musical Instrument Digital Interface) keyboard with a cute teddy bear sitting on top, facing forward. Here are a few options that might match what you're looking for:
+
+1. A royalty-free stock photo of a blue MIDI keyboard with a stuffed teddy bear perched on top, against a plain background.
+2. A whimsical illustration of a blue MIDI keyboard with a smiling teddy bear sitting on top, surrounded by music notes or other fun design elements.
+3. A photo of a music studio setup with a blue MIDI keyboard as the centerpiece, and a small teddy bear placed on top, perhaps with a pair of headphones or a music sheet nearby.
+
+Would you like me to explore any of these options further, or is there something specific you'd like me to change or add to the image?
+
